@@ -88,13 +88,25 @@ static inline dma_addr_t dma_direct_map_page(struct device *dev,
 	dma_addr_t dma_addr = phys_to_dma(dev, phys);
 
 	if (is_swiotlb_force_bounce(dev)) {
-		if (is_pci_p2pdma_page(page))
-			return DMA_MAPPING_ERROR;
-		return swiotlb_map(dev, phys, size, dir, attrs);
+		if (!(attrs & DMA_ATTR_CC_DECRYPTED)) {
+			if (is_pci_p2pdma_page(page))
+				return DMA_MAPPING_ERROR;
+			return swiotlb_map(dev, phys, size, dir, attrs);
+		}
+	} else if (attrs & DMA_ATTR_CC_DECRYPTED) {
+		return DMA_MAPPING_ERROR;
 	}
 
-	if (unlikely(!dma_capable(dev, dma_addr, size, true)) ||
-	    dma_kmalloc_needs_bounce(dev, size, dir)) {
+	if (attrs & DMA_ATTR_CC_DECRYPTED) {
+		dma_addr = phys_to_dma_unencrypted(dev, phys);
+		if (unlikely(!dma_capable(dev, dma_addr, size, false))) {
+			dev_WARN_ONCE(dev, 1,
+				     "DMA addr %pad+%zu overflow (mask %llx, bus limit %llx).\n",
+				     &dma_addr, size, *dev->dma_mask, dev->bus_dma_limit);
+			return DMA_MAPPING_ERROR;
+		}
+	} else if (unlikely(!dma_capable(dev, dma_addr, size, true)) ||
+		   dma_kmalloc_needs_bounce(dev, size, dir)) {
 		if (is_pci_p2pdma_page(page))
 			return DMA_MAPPING_ERROR;
 		if (is_swiotlb_active(dev))
